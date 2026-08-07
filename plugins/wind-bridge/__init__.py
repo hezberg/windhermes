@@ -27,9 +27,12 @@ Portable by design: only public Wind HTTPS endpoints, no WindClaw paths.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
+import subprocess
+import sys
 import urllib.parse
 import uuid
 from pathlib import Path
@@ -609,6 +612,115 @@ async def _cmd_wind_flow(raw_args: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Slash commands (Wind 登录：纯脚本，不经过 LLM)
+# ---------------------------------------------------------------------------
+
+def _login_script_path() -> str:
+    """定位 wind_login.py：优先 profile 的 scripts/，其次项目 scripts/。"""
+    hermes_home = os.environ.get("HERMES_HOME", "").strip() or str(Path.home() / ".hermes")
+    candidates = [
+        Path(hermes_home) / "scripts" / "wind_login.py",
+        Path(__file__).resolve().parent.parent.parent / "scripts" / "wind_login.py",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return ""
+
+
+def _login_pending_path() -> Path:
+    hermes_home = os.environ.get("HERMES_HOME", "").strip() or str(Path.home() / ".hermes")
+    return Path(hermes_home) / ".wind-login-pending.json"
+
+
+async def _run_script(args: list[str], timeout: int = 30) -> str:
+    """用 Hermes 自身的 Python 跑 wind_login.py（纯标准库，无需额外依赖）。"""
+    script = _login_script_path()
+    if not script:
+        return "错误：找不到 wind_login.py（请先运行 install.sh）"
+    try:
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, script, *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return "错误：登录脚本执行超时"
+    except Exception as exc:
+        return f"错误：登录脚本执行失败 - {type(exc).__name__}: {exc}"
+    out = (proc.stdout or "").strip()
+    err = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        return f"错误：{err or out or f'退出码 {proc.returncode}'}"
+    return out or "（无输出）"
+
+
+async def _cmd_wind_login(raw_args: str) -> str:
+    """/wind-login <手机号> — 发送登录验证码（纯脚本）。"""
+    phone = (raw_args or "").strip()
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    if len(digits) != 11:
+        return "用法：/wind-login <11位手机号>，如 /wind-login 13800138000"
+    # 先把手机号写入 pending 文件，第二步登录时读取
+    try:
+        pending = _login_pending_path()
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        pending.write_text(json.dumps({"phone": digits, "step": "awaiting_code"}), encoding="utf-8")
+        try:
+            os.chmod(pending, 0o600)
+        except Exception:
+            pass
+    except Exception as exc:
+        return f"错误：无法保存登录状态 - {type(exc).__name__}: {exc}"
+
+    result = await _run_script(["send", digits])
+    if result.startswith("错误："):
+        # 发送失败则清理 pending
+        try:
+            _login_pending_path().unlink(missing_ok=True)
+        except Exception:
+            pass
+        return result
+    return (
+        f"{result}\n"
+        f"验证码已发送到 {digits[:3]}****{digits[-4:]}。\n"
+        f"收到验证码后，请输入：/wind-login-code <6位验证码>"
+    )
+
+
+async def _cmd_wind_login_code(raw_args: str) -> str:
+    """/wind-login-code <验证码> — 用验证码完成登录（纯脚本）。"""
+    code = (raw_args or "").strip()
+    digits = "".join(ch for ch in code if ch.isdigit())
+    if len(digits) != 6:
+        return "用法：/wind-login-code <6位验证码>，如 /wind-login-code 123456"
+
+    pending = _login_pending_path()
+    if not pending.exists():
+        return "没有进行中的登录。请先运行：/wind-login <手机号>"
+    try:
+        state = json.loads(pending.read_text(encoding="utf-8"))
+        phone = str(state.get("phone") or "")
+    except Exception:
+        return "登录状态已损坏，请重新运行 /wind-login <手机号>"
+    if len(phone) != 11:
+        return "登录状态异常，请重新运行 /wind-login <手机号>"
+
+    result = await _run_script(
+        ["login", phone, digits, "--save", "--save-login"],
+        timeout=40,
+    )
+    # 无论成败都清理 pending（验证码一次性）
+    try:
+        pending.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
 
@@ -990,4 +1102,16 @@ def register(ctx) -> None:
         handler=_cmd_wind_flow,
         description="查询万得积分流水（默认第 1 页，可带页码）",
         args_hint="[页码]",
+    )
+    ctx.register_command(
+        name="wind-login",
+        handler=_cmd_wind_login,
+        description="万得登录第一步：发送手机验证码",
+        args_hint="<手机号>",
+    )
+    ctx.register_command(
+        name="wind-login-code",
+        handler=_cmd_wind_login_code,
+        description="万得登录第二步：用验证码完成登录并保存 session",
+        args_hint="<验证码>",
     )
