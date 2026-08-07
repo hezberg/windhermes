@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.parse
 import uuid
 from pathlib import Path
 from typing import Any
@@ -522,6 +523,92 @@ def _make_windclaw_mcp_handler(
 
 
 # ---------------------------------------------------------------------------
+# Slash commands (Wind 积分)
+# ---------------------------------------------------------------------------
+
+POINTS_ORIGIN = os.environ.get("WIND_POINTS_API_ORIGIN", "https://m.wind.com.cn")
+POINTS_BALANCE_PATH = "/wstock_business_service/point/balance"
+POINTS_LOGS_PATH = "/wstock_business_service/point/logs"
+
+
+def _points_headers(session_id: str) -> dict[str, str]:
+    return {"wind.sessionid": session_id, "windsessionid": session_id}
+
+
+async def _cmd_wind_points(raw_args: str) -> str:
+    """/wind-points — 查询万得剩余积分。"""
+    session_id = _resolve_session({})
+    if not session_id:
+        return _missing_session_error()
+    url = POINTS_ORIGIN.rstrip("/") + POINTS_BALANCE_PATH
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(url, headers=_points_headers(session_id))
+        payload = _maybe_json(resp.text)
+    except Exception as exc:
+        return f"错误：请求积分接口失败 - {type(exc).__name__}: {exc}"
+
+    if not isinstance(payload, dict) or payload.get("code") != 200:
+        msg = payload.get("message") if isinstance(payload, dict) else resp.text
+        return f"错误：{msg or '积分接口返回异常'}"[:300]
+    data = payload.get("data") or {}
+    lines = [
+        f"总积分：{data.get('totalBalance')}",
+        f"付费积分：{data.get('paidBalance')}",
+        f"赠送/临时积分：{data.get('tempBalance')}",
+    ]
+    try:
+        ext = json.loads(data.get("extendInfo") or "{}")
+        if ext.get("bonusTips"):
+            lines.append(f"提示：{ext['bonusTips']}")
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
+async def _cmd_wind_flow(raw_args: str) -> str:
+    """/wind-flow [页码] — 查询万得积分流水，默认第 1 页。"""
+    session_id = _resolve_session({})
+    if not session_id:
+        return _missing_session_error()
+    page = 1
+    arg = (raw_args or "").strip()
+    if arg:
+        try:
+            page = max(1, int(arg))
+        except ValueError:
+            return "用法：/wind-flow [页码]，如 /wind-flow 2"
+    params = urllib.parse.urlencode({"page": page, "pageSize": 20})
+    url = f"{POINTS_ORIGIN.rstrip('/')}{POINTS_LOGS_PATH}?{params}"
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(url, headers=_points_headers(session_id))
+        payload = _maybe_json(resp.text)
+    except Exception as exc:
+        return f"错误：请求积分流水失败 - {type(exc).__name__}: {exc}"
+
+    if not isinstance(payload, dict) or payload.get("code") != 200:
+        msg = payload.get("message") if isinstance(payload, dict) else resp.text
+        return f"错误：{msg or '积分流水接口返回异常'}"[:300]
+    data = payload.get("data") or {}
+    rows = data.get("data") or []
+    total = data.get("total", 0)
+    total_page = data.get("totalPage", 1)
+    if not rows:
+        return f"共 {total} 条 | 第 {page}/{total_page} 页\n（暂无流水记录）"
+    lines = [f"共 {total} 条 | 第 {page}/{total_page} 页"]
+    type_names = {1: "充值", 2: "赠送", 3: "扣减"}
+    for row in rows:
+        point = row.get("point")
+        point_str = f"{point:+d}" if isinstance(point, int) else str(point)
+        create_time = row.get("createTime") or ""
+        type_name = type_names.get(row.get("type"), f"type{row.get('type')}")
+        remark = (row.get("remark") or "")[:60]
+        lines.append(f"{create_time} | {point_str} | {type_name} | {remark}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
 
@@ -893,3 +980,14 @@ def register(ctx) -> None:
             description=tool["description"],
             is_async=True,
         )
+    ctx.register_command(
+        name="wind-points",
+        handler=_cmd_wind_points,
+        description="查询万得剩余积分（总/付费/赠送）",
+    )
+    ctx.register_command(
+        name="wind-flow",
+        handler=_cmd_wind_flow,
+        description="查询万得积分流水（默认第 1 页，可带页码）",
+        args_hint="[页码]",
+    )
