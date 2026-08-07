@@ -20,6 +20,7 @@ SKILLS_SRC="$SCRIPT_DIR/skills/wind"
 SOUL_SRC="$SCRIPT_DIR/SOUL.md"
 MEMORY_SRC="$SCRIPT_DIR/MEMORY.md"
 SMOKE_SRC="$SCRIPT_DIR/scripts/smoke_wind_tools.py"
+LOGIN_SRC="$SCRIPT_DIR/scripts/wind_login.py"
 
 RED=$'\033[31m'; GREEN=$'\033[32m'; NC=$'\033[0m'
 step() { echo "${GREEN}==>${NC} $*"; }
@@ -148,7 +149,10 @@ mkdir -p "$PROFILE_DIR/memories"
 cp "$MEMORY_SRC" "$PROFILE_DIR/memories/MEMORY.md"
 mkdir -p "$PROFILE_DIR/scripts"
 cp "$SMOKE_SRC" "$PROFILE_DIR/scripts/smoke_wind_tools.py"
-ok "SOUL.md / MEMORY.md / smoke 脚本已就位"
+if [[ -f "$LOGIN_SRC" ]]; then
+  cp "$LOGIN_SRC" "$PROFILE_DIR/scripts/wind_login.py"
+fi
+ok "SOUL.md / MEMORY.md / smoke / login 脚本已就位"
 
 # ── 6. 配置 .env ─────────────────────────────────────────────────────────
 step "配置 .env"
@@ -191,7 +195,7 @@ WIND_COUNT="$(echo "$SKILL_OUT" | grep -c "│ wind " || true)"
 [[ "$WIND_COUNT" -ge "$(ls "$SKILLS_SRC" | wc -l | tr -d ' ')" ]] || { err "wind 技能数量异常（$WIND_COUNT）"; FAILED=1; }
 FINAL_PLUGIN_OUT="$("$HERMES_BIN" -p "$PROFILE_NAME" plugins list 2>&1 || true)"
 echo "$FINAL_PLUGIN_OUT" | grep -q "wind_tool" || { err "插件 wind_tool 未注册"; FAILED=1; }
-for f in "$PROFILE_DIR/SOUL.md" "$PROFILE_DIR/scripts/smoke_wind_tools.py" "$PROFILE_DIR/.env" "$PROFILE_DIR/memories/MEMORY.md"; do
+for f in "$PROFILE_DIR/SOUL.md" "$PROFILE_DIR/scripts/smoke_wind_tools.py" "$PROFILE_DIR/scripts/wind_login.py" "$PROFILE_DIR/.env" "$PROFILE_DIR/memories/MEMORY.md"; do
   [[ -f "$f" ]] || { err "$(basename "$f") 缺失"; FAILED=1; }
 done
 grep -q "^WIND_SESSION_ID=" "$PROFILE_ENV" || { err "WIND_SESSION_ID 未配置"; FAILED=1; }
