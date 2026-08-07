@@ -23,6 +23,7 @@ import asyncio
 import importlib.util
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -186,9 +187,14 @@ def build_cases(session_id: str) -> list[tuple[str, dict]]:
     ]
 
 
-async def run_case(module, name: str, args: dict) -> str:
+async def run_case(module, name: str, args: dict, timeout: float) -> str:
     try:
-        output = await _handler_for(module, name)(args)
+        output = await asyncio.wait_for(
+            _handler_for(module, name)(args),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        return f"错误：超时（>{timeout:.0f}s 无响应）"
     except Exception as exc:  # noqa: BLE001
         output = f"EXCEPTION: {type(exc).__name__}: {exc}"
     return output
@@ -199,6 +205,7 @@ async def main() -> int:
     parser.add_argument("--session-id", default="", help="万得会话 ID")
     parser.add_argument("--tool", default="", help="只测单个工具名（默认全部 20 个）")
     parser.add_argument("--max-chars", type=int, default=700, help="每个工具输出截断长度")
+    parser.add_argument("--timeout", type=float, default=60.0, help="每个工具超时秒数（默认 60）")
     args = parser.parse_args()
 
     module = load_plugin()
@@ -216,9 +223,15 @@ async def main() -> int:
             return 2
 
     failed = 0
-    for name, case_args in cases:
-        print(f"\n===== {name} =====")
-        output = await run_case(module, name, case_args)
+    total = len(cases)
+    for i, (name, case_args) in enumerate(cases, 1):
+        started = time.monotonic()
+        print(f"\n[{i:>2}/{total}] {name} …", flush=True)
+        output = await run_case(module, name, case_args, args.timeout)
+        elapsed = time.monotonic() - started
+        ok = not (output.startswith("错误：") or output.startswith("EXCEPTION"))
+        mark = "✓" if ok else "✗"
+        print(f"    {mark} {elapsed:5.1f}s", flush=True)
         print(output[: args.max_chars])
         if output.startswith("错误：") or output.startswith("EXCEPTION"):
             failed += 1

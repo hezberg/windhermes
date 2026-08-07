@@ -26,6 +26,12 @@ step() { echo "${GREEN}==>${NC} $*"; }
 ok()   { echo "  ${GREEN}✔${NC} $*"; }
 err()  { echo "  ${RED}✘${NC} $*"; }
 
+# ── 安装日志（tee 到文件，方便调试）──────────────────────────────────────
+LOG_FILE="${LOG_FILE:-/tmp/windagent-install.log}"
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "===== WindAgent install $(date '+%F %T') ====="
+
 FORCE=0
 CLI_SESSION=""
 HAS_FLAGS=0
@@ -192,8 +198,12 @@ grep -q "^WIND_SESSION_ID=" "$PROFILE_ENV" || { err "WIND_SESSION_ID 未配置";
 
 echo
 if [[ "$FAILED" == "0" ]]; then
+  cp "$LOG_FILE" "$PROFILE_DIR/install.log" 2>/dev/null || true
   echo "${GREEN}✔ 安装完成。${NC} 使用: hermes -p $PROFILE_NAME chat"
+  echo "  安装日志: $PROFILE_DIR/install.log"
 else
+  cp "$LOG_FILE" "$PROFILE_DIR/install.log" 2>/dev/null || true
   echo "${RED}✘ 安装完成，但 $FAILED 项未通过，请检查上方提示。${NC}"
+  echo "  安装日志: $PROFILE_DIR/install.log"
   exit 1
 fi
