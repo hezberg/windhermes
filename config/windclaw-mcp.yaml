@@ -1,0 +1,31 @@
+# WindClaw MCP 服务器配置片段（存档）
+#
+# 注意：这 13 个工具已作为原生工具集成进 wind-bridge 插件（0.2.0），
+# 工具名不带 mcp__ 前缀，直接用原名（如 stock_get_realtime_analysis）。
+# 除非你想保留独立的 MCP 服务器（工具名带 mcp__windclaw_mcp__ 前缀），
+# 否则无需再合并下面的配置，直接使用 wind-bridge 即可。
+#
+# 该服务器原始 13 个工具：wechat_extract_article_content、
+# wechat_search_articles_by_account、stock_get_market_realtime_analysis、
+# stock_get_sector_realtime_analysis、stock_get_industry_research、
+# stock_get_company_profile、stock_get_company_finance_analysis、
+# stock_get_company_earnings_estimate、stock_get_company_valuation、
+# stock_get_company_updates、stock_get_money_flow_analysis、
+# stock_get_technical_analysis、stock_get_realtime_analysis。
+#
+# 如需以 MCP 形式启用：把下面 mcp_servers 块合并进 ~/.hermes/config.yaml
+# 的 mcp_servers（注意与已有的 codegraph 等服务器并列），保存后
+# 执行 /reload-mcp 或重启 Hermes；换 token 更新 .env 后 /reload-mcp。
+
+mcp_servers:
+  windclaw_mcp:
+    url: "https://m.wind.com.cn/Wind.MCP.Server/vserver/vserver_windclaw_wx/mcp"
+    headers:
+      Content-Type: application/json
+      Accept: text/event-stream,application/json
+      wind.sessionid: "${WIND_SESSION_ID}"
+      windsessionid: "${WIND_SESSION_ID}"
+    connect_timeout: 15
+    timeout: 60
+    skip_preflight: true
+    enabled: true

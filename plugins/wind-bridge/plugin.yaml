@@ -1,0 +1,25 @@
+name: wind-bridge
+version: 0.2.0
+description: "Wind 金融数据桥接：核心数据工具（get_wind_data / document_search / wind_financial_reference_content / wind_web_search）、行情工具（quote_*）以及 WindClaw MCP 13 个工具（股票分析/财务/估值/资金/技术/公众号等）。鉴权通过工具参数 session_id 或环境变量 WIND_SESSION_ID（~/.hermes/.env）。不依赖 WindClaw。"
+author: zeh
+provides_tools:
+  - get_wind_data
+  - document_search
+  - wind_financial_reference_content
+  - wind_web_search
+  - quote_get_stock_realtime_performance
+  - quote_get_sector_realtime_performance
+  - quote_get_market_realtime_performance
+  - wechat_extract_article_content
+  - wechat_search_articles_by_account
+  - stock_get_market_realtime_analysis
+  - stock_get_sector_realtime_analysis
+  - stock_get_industry_research
+  - stock_get_company_profile
+  - stock_get_company_finance_analysis
+  - stock_get_company_earnings_estimate
+  - stock_get_company_valuation
+  - stock_get_company_updates
+  - stock_get_money_flow_analysis
+  - stock_get_technical_analysis
+  - stock_get_realtime_analysis
