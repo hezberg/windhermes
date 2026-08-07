@@ -38,6 +38,41 @@ TEMPLATE_CODE = "SMS_DEFAULT_001"
 SOURCE_NAME = "WindClaw-Mac" if sys.platform == "darwin" else "WindClaw"
 ISP_TYPE = "4"
 
+CRED_FILE_NAME = ".wind-login.json"
+
+
+def _cred_path(profile: str = "windagent") -> Path:
+    """免登录凭证文件：profile 目录下 .wind-login.json。"""
+    return Path.home() / ".hermes" / "profiles" / profile / CRED_FILE_NAME
+
+
+def _save_credential(profile: str, data: dict) -> Path:
+    path = _cred_path(profile)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
+    return path
+
+
+def _load_credential(profile: str) -> dict:
+    path = _cred_path(profile)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def extract_login_token(other_info: str) -> str:
+    """从 otherInfo 提取 Token:xxx。"""
+    import re
+    m = re.search(r"(?:^|;)Token:([^;]+)", other_info or "")
+    return m.group(1).strip() if m else ""
+
 
 # ── 工具函数（对齐 WindClaw 源码）────────────────────────────────────────
 
@@ -218,10 +253,12 @@ def login_with_code(phone: str, code: str) -> dict:
         session_id = (resp.get("data", {}).get("authData") or {}).get("sessionID", "").strip()
         if session_id:
             user_info = resp.get("data", {}).get("authData", {}).get("userInfo") or {}
+            token = extract_login_token(user_info.get("otherInfo") or "")
             return {
                 "success": True,
                 "sessionId": session_id,
                 "userInfo": user_info,
+                "loginToken": token,
                 "raw": resp,
             }
 
@@ -238,6 +275,45 @@ def login_with_code(phone: str, code: str) -> dict:
         1006: "账号被锁定",
     }
     msg = resp.get("message") or messages.get(retvalue) or f"登录失败（retvalue={retvalue}）"
+    raise RuntimeError(msg)
+
+
+def silent_refresh(session_id_or_token: str, user_id: str = "") -> dict:
+    """静默续期：用 loginToken 或旧 sessionId 换新 session（verifyMode=3）。
+
+    对应 WindClaw 的 silentLogin（jg）：不依赖手机号验证码，
+    服务端用 loginName（token/session）+ deviceFingerprint 换新 sessionId。
+    """
+    if not session_id_or_token.strip():
+        raise RuntimeError("缺少 session/token")
+    cfg = _auth_config()
+    dev = device_context()
+    # otherInfo: 原设备信息 + Source + specificusertype:210
+    other = f"{dev['otherInfo']}|Source:{SOURCE_NAME}|specificusertype:210"
+    if user_id:
+        other = f"{other}|loginuserid:{user_id}"
+    body = {
+        "verifyMode": 3,
+        "loginName": session_id_or_token.strip(),
+        "deviceFingerprint": dev["deviceFingerprint"],
+        "terminalType": cfg["terminalType"],
+        "loginMode": cfg["loginModePc"],
+        "otherInfo": other,
+        "fromIP": dev["fromIP"],
+    }
+    resp = _post("/visa/registerAndLogin", body)
+    if resp.get("code") == 200 and resp.get("data", {}).get("retvalue") == 0:
+        session_id = (resp.get("data", {}).get("authData") or {}).get("sessionID", "").strip()
+        if session_id:
+            user_info = resp.get("data", {}).get("authData", {}).get("userInfo") or {}
+            return {
+                "success": True,
+                "sessionId": session_id,
+                "userInfo": user_info,
+                "raw": resp,
+            }
+    retvalue = resp.get("data", {}).get("retvalue")
+    msg = resp.get("message") or f"静默续期失败（retvalue={retvalue}）"
     raise RuntimeError(msg)
 
 
@@ -274,6 +350,17 @@ def main() -> int:
     p_login.add_argument("--save", action="store_true", help="写入 windagent profile .env")
     p_login.add_argument("--smoke", action="store_true", help="登录后跑冒烟测试")
     p_login.add_argument("--profile", default="windagent", help="profile 名（--save 用）")
+    p_login.add_argument("--save-login", action="store_true", help="保存免登录凭证（loginToken）到 profile")
+
+    p_refresh = sub.add_parser("refresh", help="静默续期：用旧 session/token 换新 session")
+    p_refresh.add_argument("session", help="旧 sessionId 或 loginToken")
+    p_refresh.add_argument("--user-id", default="", help="用户 ID（可选，WindClaw 会带上）")
+    p_refresh.add_argument("--save", action="store_true", help="写入 windagent profile .env")
+    p_refresh.add_argument("--profile", default="windagent", help="profile 名（--save 用）")
+
+    p_cred = sub.add_parser("cred", help="查看/续期已保存的免登录凭证")
+    p_cred.add_argument("--profile", default="windagent", help="profile 名")
+    p_cred.add_argument("--refresh", action="store_true", help="用凭证中的 loginToken 静默续期并写回")
 
     args = parser.parse_args()
 
@@ -284,6 +371,52 @@ def main() -> int:
             print(f"✗ {exc}", file=sys.stderr)
             return 1
         print(f"✓ 验证码已发送（{result['countdownSeconds']}s 有效）")
+        return 0
+
+    if args.action == "refresh":
+        try:
+            result = silent_refresh(args.session, args.user_id)
+        except RuntimeError as exc:
+            print(f"✗ {exc}", file=sys.stderr)
+            return 1
+        print(f"✓ 静默续期成功")
+        print(f"  session id: {result['sessionId']}")
+        user = result["userInfo"]
+        if user:
+            print(f"  用户: {user.get('userName') or user.get('userPhone') or user.get('loginName') or ''} "
+                  f"(userID={user.get('userID')})")
+        if args.save:
+            env_path = _save_session(result["sessionId"])
+            print(f"  ✓ 已写入 {env_path}")
+        return 0
+
+    if args.action == "cred":
+        cred = _load_credential(args.profile)
+        if not cred:
+            print(f"✗ 未找到免登录凭证（{_cred_path(args.profile)}）", file=sys.stderr)
+            print("  请先用 login --save-login 登录保存凭证", file=sys.stderr)
+            return 1
+        print(f"凭证: {_cred_path(args.profile)}")
+        print(f"  手机号: {cred.get('phone', '')}")
+        print(f"  userID: {cred.get('userId', '')}")
+        print(f"  sessionId: {cred.get('sessionId', '')}")
+        print(f"  loginToken: {cred.get('loginToken', '')[:12]}…（已保存）")
+        if args.refresh:
+            token = cred.get("loginToken", "")
+            if not token:
+                print("✗ 凭证中没有 loginToken，无法静默续期", file=sys.stderr)
+                return 1
+            print("\n静默续期…")
+            try:
+                result = silent_refresh(token, str(cred.get("userId", "")))
+            except RuntimeError as exc:
+                print(f"✗ 续期失败: {exc}", file=sys.stderr)
+                return 1
+            cred["sessionId"] = result["sessionId"]
+            _save_credential(args.profile, cred)
+            _save_session(result["sessionId"])
+            print(f"✓ 续期成功，新 sessionId: {result['sessionId']}")
+            print(f"  已写回凭证 + .env")
         return 0
 
     # login
@@ -300,6 +433,22 @@ def main() -> int:
     if user:
         print(f"  用户: {user.get('userName') or user.get('userPhone') or user.get('loginName') or ''} "
               f"(userID={user.get('userID')})")
+
+    if args.save_login:
+        token = result.get("loginToken", "")
+        cred = {
+            "phone": _digits(args.phone),
+            "userId": str(user.get("userID") or ""),
+            "sessionId": session_id,
+            "loginToken": token,
+            "savedAt": __import__("datetime").datetime.now().isoformat(),
+        }
+        cred_path = _save_credential(args.profile, cred)
+        if token:
+            print(f"  ✓ 免登录凭证已保存: {cred_path}")
+            print(f"    提示: 之后可用 `wind_login.py cred --refresh` 免验证码续期")
+        else:
+            print(f"  ⚠ 登录响应中没有 Token，已保存 session 但无法免登录续期")
 
     if args.save:
         env_path = _save_session(session_id)

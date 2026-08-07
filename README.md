@@ -13,6 +13,7 @@
 - `MEMORY.md`：会话记忆引导（安装时覆盖到 profile，§ 分隔条目格式）
 - `install.sh` + `scripts/windagent_setup.py`：一键安装（静默 / 交互向导）
 - `scripts/smoke_wind_tools.py`：20 个工具的连通性冒烟测试
+- `scripts/wind_login.py`：手机号+验证码登录 → session id，支持免登录静默续期
 - `scripts/update_wind_session.sh`：异机场景下用 scp 拉取最新 token
 
 ## 前置条件
@@ -91,6 +92,24 @@ ssh-copy-id user@WindClaw机器IP  # 把公钥装到 WindClaw 机器
 
 - 在 WindClaw 机器上：`cat ~/.openclaw-windclaw/users/*/openclaw/.windclaw-aigw-session`
 - 或从万得 App / WindClaw 客户端登录态获取（具体入口以万得官方为准）
+- 或直接用手机号+验证码登录获取（不依赖 WindClaw）：
+
+```bash
+python3 scripts/wind_login.py send 你的手机号
+python3 scripts/wind_login.py login 你的手机号 验证码 --save --save-login
+```
+
+## 免登录（静默续期）
+
+`wind_login.py` 登录成功后会把 `loginToken` 存入 `~/.hermes/profiles/windagent/.wind-login.json`
+（权限 600）。之后 session 过期时无需再收验证码，一条命令静默续期：
+
+```bash
+python3 scripts/wind_login.py cred --profile windagent --refresh
+```
+
+该机制逆向自 WindClaw 的 Visa 认证（verifyMode=3 + loginToken），与 WindClaw
+桌面端"每天打开不用登录"是同一套链路，可跨设备使用。
 
 ## 验证
 

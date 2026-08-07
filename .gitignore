@@ -3,6 +3,7 @@
 .env.*
 *.token
 wind-session.token
+.wind-login.json
 
 # ── Python 缓存 ──────────────────────────────────
 __pycache__/
