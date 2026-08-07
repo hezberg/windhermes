@@ -206,6 +206,7 @@ async def main() -> int:
     parser.add_argument("--tool", default="", help="只测单个工具名（默认全部 20 个）")
     parser.add_argument("--max-chars", type=int, default=700, help="每个工具输出截断长度")
     parser.add_argument("--timeout", type=float, default=60.0, help="每个工具超时秒数（默认 60）")
+    parser.add_argument("--quiet", action="store_true", help="只显示进度和结果，不打印每个工具的详细输出")
     args = parser.parse_args()
 
     module = load_plugin()
@@ -226,13 +227,15 @@ async def main() -> int:
     total = len(cases)
     for i, (name, case_args) in enumerate(cases, 1):
         started = time.monotonic()
-        print(f"\n[{i:>2}/{total}] {name} …", flush=True)
+        print(f"[{i:>2}/{total}] {name} …", flush=True)
         output = await run_case(module, name, case_args, args.timeout)
         elapsed = time.monotonic() - started
         ok = not (output.startswith("错误：") or output.startswith("EXCEPTION"))
         mark = "✓" if ok else "✗"
         print(f"    {mark} {elapsed:5.1f}s", flush=True)
-        print(output[: args.max_chars])
+        if not args.quiet:
+            print(output[: args.max_chars])
+            print()
         if output.startswith("错误：") or output.startswith("EXCEPTION"):
             failed += 1
 

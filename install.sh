@@ -175,7 +175,7 @@ if [[ -n "$PROMPT_SESSION" ]]; then
   set_env "WIND_SESSION_ID" "$PROMPT_SESSION"
   step "运行冒烟测试（20 个工具）…"
   HERMES_HOME="$PROFILE_DIR" "$HERMES_PYTHON" "$PROFILE_DIR/scripts/smoke_wind_tools.py" --session-id "$PROMPT_SESSION" \
-    | tail -1 || true
+    --quiet || true
 else
   ok "跳过冒烟测试"
 fi
