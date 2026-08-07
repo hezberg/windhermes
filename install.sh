@@ -54,6 +54,13 @@ HERMES_AGENT_REPO="${HERMES_AGENT_REPO:-$HERMES_ROOT/hermes-agent}"
 HERMES_AGENT_SKILL_SRC="$HERMES_AGENT_REPO/skills/autonomous-ai-agents/hermes-agent"
 [[ -d "$HERMES_AGENT_SKILL_SRC" ]] || HERMES_AGENT_SKILL_SRC="$HERMES_ROOT/skills/autonomous-ai-agents/hermes-agent"
 
+# 冒烟测试需要 httpx：优先用 Hermes 自己的 venv Python（必有该依赖）
+HERMES_PYTHON=""
+for candidate in "$HERMES_AGENT_REPO/venv/bin/python" "$HERMES_AGENT_REPO/.venv/bin/python"; do
+  if [[ -x "$candidate" ]]; then HERMES_PYTHON="$candidate"; break; fi
+done
+HERMES_PYTHON="${HERMES_PYTHON:-python3}"
+
 # ── 2. 创建 profile ──────────────────────────────────────────────────────
 step "创建 profile: $PROFILE_NAME"
 if [[ -d "$PROFILE_DIR" ]]; then
@@ -161,7 +168,7 @@ fi
 if [[ -n "$PROMPT_SESSION" ]]; then
   set_env "WIND_SESSION_ID" "$PROMPT_SESSION"
   step "运行冒烟测试（20 个工具）…"
-  HERMES_HOME="$PROFILE_DIR" python3 "$PROFILE_DIR/scripts/smoke_wind_tools.py" --session-id "$PROMPT_SESSION" \
+  HERMES_HOME="$PROFILE_DIR" "$HERMES_PYTHON" "$PROFILE_DIR/scripts/smoke_wind_tools.py" --session-id "$PROMPT_SESSION" \
     | tail -1 || true
 else
   ok "跳过冒烟测试"
