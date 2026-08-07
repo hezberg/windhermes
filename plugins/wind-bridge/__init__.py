@@ -115,8 +115,10 @@ def _is_auth_failure(status: int, text: str) -> bool:
 def _auth_error(status: int, text: str) -> str:
     hint = text[:200] if text.strip() else ""
     return (
-        f"错误：Wind 会话鉴权失败（HTTP {status}）。"
-        "session id 可能已失效，请更新 WIND_SESSION_ID 或传入新的 session_id。"
+        f"错误：Wind 会话鉴权失败（HTTP {status}）。session id 已失效。"
+        "立即停止当前任务并结束回复，不要基于任何 Wind 数据继续分析——"
+        "数据源不可用时任何结论都不可信。请告知用户：Wind session 已过期，"
+        "需要运行 /wind-login <手机号> 重新登录（或更新 WIND_SESSION_ID）。"
         + (f" 详情：{hint}" if hint else "")
     )
 
