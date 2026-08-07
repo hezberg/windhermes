@@ -184,6 +184,44 @@ else
   ok "跳过冒烟测试"
 fi
 
+# ── 7.5 注册 4 个 cron 日报任务 ─────────────────────────────────────────
+# 工作日判断口子：BUSINESS_DAY_SCRIPT 为非空时，cron 任务先执行该脚本，
+# 输出非工作日（非零退出）则跳过本次运行。当前默认不启用，等待工作日方案。
+BUSINESS_DAY_SCRIPT="${BUSINESS_DAY_SCRIPT:-}"
+
+step "注册 cron 日报任务"
+declare -a CRON_JOBS=(
+  "美股收盘市场简报|0 7 * * 1-5|us-market-close-briefing"
+  "盘前机会挖掘|30 8 * * 1-5|premarket-opportunity-mining"
+  "午间复盘|15 12 * * 1-5|midday-market-review"
+  "盘后市场解读|0 16 * * 1-5|after-close-market-review"
+)
+
+CRON_OK=0
+for entry in "${CRON_JOBS[@]}"; do
+  IFS='|' read -r job_name schedule skill_name <<< "$entry"
+  if "$HERMES_BIN" -p "$PROFILE_NAME" cron list 2>&1 | grep -q "$job_name"; then
+    ok "cron 已存在: $job_name"
+    continue
+  fi
+  prompt_text="使用 ${skill_name} 技能，生成${job_name}。"
+  if [[ -n "$BUSINESS_DAY_SCRIPT" ]]; then
+    prompt_text="先执行 $BUSINESS_DAY_SCRIPT 判断今日是否为工作日；若非工作日则直接回复跳过。${prompt_text}"
+  fi
+  if "$HERMES_BIN" -p "$PROFILE_NAME" cron create "$schedule" "$prompt_text" \
+      --name "$job_name" --skill "$skill_name" --deliver local >/dev/null 2>&1; then
+    ok "cron 已注册: $job_name ($schedule)"
+    CRON_OK=$((CRON_OK + 1))
+  else
+    err "cron 注册失败: $job_name"
+  fi
+done
+if [[ "$CRON_OK" -gt 0 ]]; then
+  ok "新增 $CRON_OK 个 cron 任务（工作日判断待启用: BUSINESS_DAY_SCRIPT 为空）"
+else
+  ok "cron 均已存在或无新增"
+fi
+
 # ── 8. 收尾检查 ─────────────────────────────────────────────────────────
 step "收尾检查"
 FAILED=0

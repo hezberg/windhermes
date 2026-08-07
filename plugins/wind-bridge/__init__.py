@@ -65,24 +65,44 @@ _AUTH_FAIL_RE = re.compile(
 # ---------------------------------------------------------------------------
 
 def _env_value(name: str) -> str:
-    """Prefer ~/.hermes/.env so rotating the token needs no gateway restart."""
-    env_file = Path.home() / ".hermes" / ".env"
-    try:
-        for raw in env_file.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("export "):
-                line = line[len("export "):].strip()
-            if "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip().strip("\"").strip("'")
-            if key == name and value:
-                return value
-    except Exception:
-        pass
+    """读 profile/全局 .env（每次实时读，token 轮换无需重启）。
+
+    优先级（避免依赖 HERMES_HOME —— gateway/cron 子进程可能未设置）：
+      1. windagent profile 的 .env（~/.hermes/profiles/windagent/.env）
+      2. HERMES_HOME/.env（若指向其他 profile）
+      3. 全局 ~/.hermes/.env（default profile 兜底）
+      4. 进程环境变量
+    """
+    candidates = []
+    profile_env = Path.home() / ".hermes" / "profiles" / "windagent" / ".env"
+    candidates.append(profile_env)
+    hermes_home = os.environ.get("HERMES_HOME", "").strip()
+    if hermes_home:
+        candidates.append(Path(hermes_home) / ".env")
+    candidates.append(Path.home() / ".hermes" / ".env")
+
+    seen: set[str] = set()
+    for env_file in candidates:
+        path_str = str(env_file)
+        if path_str in seen:
+            continue
+        seen.add(path_str)
+        try:
+            for raw in env_file.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[len("export "):].strip()
+                if "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip("\"").strip("'")
+                if key == name and value:
+                    return value
+        except Exception:
+            continue
     return os.environ.get(name, "").strip()
 
 
