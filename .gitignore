@@ -4,6 +4,7 @@
 *.token
 wind-session.token
 .wind-login.json
+scripts/wind-business-days.json
 
 # ── Python 缓存 ──────────────────────────────────
 __pycache__/

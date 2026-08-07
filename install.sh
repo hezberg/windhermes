@@ -21,6 +21,7 @@ SOUL_SRC="$SCRIPT_DIR/SOUL.md"
 MEMORY_SRC="$SCRIPT_DIR/MEMORY.md"
 SMOKE_SRC="$SCRIPT_DIR/scripts/smoke_wind_tools.py"
 LOGIN_SRC="$SCRIPT_DIR/scripts/wind_login.py"
+BUSINESS_DAY_SRC="$SCRIPT_DIR/scripts/is_business_day.py"
 
 RED=$'\033[31m'; GREEN=$'\033[32m'; NC=$'\033[0m'
 step() { echo "${GREEN}==>${NC} $*"; }
@@ -152,7 +153,10 @@ cp "$SMOKE_SRC" "$PROFILE_DIR/scripts/smoke_wind_tools.py"
 if [[ -f "$LOGIN_SRC" ]]; then
   cp "$LOGIN_SRC" "$PROFILE_DIR/scripts/wind_login.py"
 fi
-ok "SOUL.md / MEMORY.md / smoke / login 脚本已就位"
+if [[ -f "$BUSINESS_DAY_SRC" ]]; then
+  cp "$BUSINESS_DAY_SRC" "$PROFILE_DIR/scripts/is_business_day.py"
+fi
+ok "SOUL.md / MEMORY.md / smoke / login / 交易日脚本已就位"
 
 # ── 6. 配置 .env ─────────────────────────────────────────────────────────
 step "配置 .env"
@@ -185,9 +189,9 @@ else
 fi
 
 # ── 7.5 注册 4 个 cron 日报任务 ─────────────────────────────────────────
-# 工作日判断口子：BUSINESS_DAY_SCRIPT 为非空时，cron 任务先执行该脚本，
-# 输出非工作日（非零退出）则跳过本次运行。当前默认不启用，等待工作日方案。
-BUSINESS_DAY_SCRIPT="${BUSINESS_DAY_SCRIPT:-}"
+# 交易日判断：BUSINESS_DAY_SCRIPT 为非空时，cron 任务先执行该脚本，
+# 非交易日（非零退出）则跳过本次运行。默认用 is_business_day.py（上交所官网休市安排）。
+BUSINESS_DAY_SCRIPT="${BUSINESS_DAY_SCRIPT:-$PROFILE_DIR/scripts/is_business_day.py}"
 
 step "注册 cron 日报任务"
 declare -a CRON_JOBS=(
@@ -217,7 +221,7 @@ for entry in "${CRON_JOBS[@]}"; do
   fi
 done
 if [[ "$CRON_OK" -gt 0 ]]; then
-  ok "新增 $CRON_OK 个 cron 任务（工作日判断待启用: BUSINESS_DAY_SCRIPT 为空）"
+  ok "新增 $CRON_OK 个 cron 任务（交易日判断: is_business_day.py）"
 else
   ok "cron 均已存在或无新增"
 fi
@@ -233,7 +237,7 @@ WIND_COUNT="$(echo "$SKILL_OUT" | grep -c "│ wind " || true)"
 [[ "$WIND_COUNT" -ge "$(ls "$SKILLS_SRC" | wc -l | tr -d ' ')" ]] || { err "wind 技能数量异常（$WIND_COUNT）"; FAILED=1; }
 FINAL_PLUGIN_OUT="$("$HERMES_BIN" -p "$PROFILE_NAME" plugins list 2>&1 || true)"
 echo "$FINAL_PLUGIN_OUT" | grep -q "wind_tool" || { err "插件 wind_tool 未注册"; FAILED=1; }
-for f in "$PROFILE_DIR/SOUL.md" "$PROFILE_DIR/scripts/smoke_wind_tools.py" "$PROFILE_DIR/scripts/wind_login.py" "$PROFILE_DIR/.env" "$PROFILE_DIR/memories/MEMORY.md"; do
+for f in "$PROFILE_DIR/SOUL.md" "$PROFILE_DIR/scripts/smoke_wind_tools.py" "$PROFILE_DIR/scripts/wind_login.py" "$PROFILE_DIR/scripts/is_business_day.py" "$PROFILE_DIR/.env" "$PROFILE_DIR/memories/MEMORY.md"; do
   [[ -f "$f" ]] || { err "$(basename "$f") 缺失"; FAILED=1; }
 done
 grep -q "^WIND_SESSION_ID=" "$PROFILE_ENV" || { err "WIND_SESSION_ID 未配置"; FAILED=1; }
