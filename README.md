@@ -15,6 +15,8 @@
 - `scripts/smoke_wind_tools.py`：20 个工具的连通性冒烟测试
 - `scripts/wind_login.py`：手机号+验证码登录 → session id，支持免登录静默续期
 - `scripts/update_wind_session.sh`：异机场景下用 scp 拉取最新 token
+- `scripts/is_business_day.py`：A 股交易日判断（抓取上交所官方休市安排 + 本地缓存）
+- `docs/install-doctor.md`：安装测试方案（即 `doctor` 检查项定义）
 
 ## 前置条件
 
@@ -32,6 +34,15 @@
 ```bash
 ./install.sh
 ```
+
+### 安装后健康检查（doctor）
+
+```bash
+./install.sh doctor          # 检查环境/profile/技能/插件/文件/鉴权/cron/交易日脚本
+./install.sh doctor --full   # 额外跑 20 个工具冒烟测试
+```
+
+检查项定义与测试方案见 `docs/install-doctor.md`。
 
 也可以直接调用向导：
 

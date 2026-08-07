@@ -7,6 +7,8 @@
 #   ./install.sh                     # 交互式向导（推荐）
 #   ./install.sh --session-id <tok>  # 直接给定 token
 #   ./install.sh --force             # profile 已存在时重建
+#   ./install.sh doctor              # 安装健康检查（测试方案即检查结果）
+#   ./install.sh doctor --full       # 健康检查 + 20 个工具冒烟测试（需已登录）
 #
 set -euo pipefail
 
@@ -24,9 +26,11 @@ LOGIN_SRC="$SCRIPT_DIR/scripts/wind_login.py"
 BUSINESS_DAY_SRC="$SCRIPT_DIR/scripts/is_business_day.py"
 
 RED=$'\033[31m'; GREEN=$'\033[32m'; NC=$'\033[0m'
+YELLOW=$'\033[33m'
 step() { echo "${GREEN}==>${NC} $*"; }
 ok()   { echo "  ${GREEN}✔${NC} $*"; }
 err()  { echo "  ${RED}✘${NC} $*"; }
+warn() { echo "  ${YELLOW}⚠${NC} $*"; }
 
 # ── 安装日志（tee 到文件，方便调试）──────────────────────────────────────
 LOG_FILE="${LOG_FILE:-/tmp/windagent-install.log}"
@@ -37,10 +41,14 @@ echo "===== WindAgent install $(date '+%F %T') ====="
 FORCE=0
 CLI_SESSION=""
 HAS_FLAGS=0
+DOCTOR=0
+DOCTOR_FULL=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force) FORCE=1; HAS_FLAGS=1; shift ;;
     --session-id) CLI_SESSION="${2:-}"; HAS_FLAGS=1; shift 2 ;;
+    doctor|--doctor) DOCTOR=1; HAS_FLAGS=1; shift ;;
+    --full) DOCTOR_FULL=1; HAS_FLAGS=1; shift ;;
     -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
     *) echo "未知参数: $1" >&2; exit 1 ;;
   esac
@@ -49,6 +57,214 @@ done
 # 交互终端 + 无参数 → 转交 Hermes 风格向导
 if [[ "$HAS_FLAGS" == "0" && -t 0 && -t 1 ]]; then
   exec python3 "$SCRIPT_DIR/scripts/windagent_setup.py"
+fi
+
+# ── doctor：安装健康检查（测试方案即检查结果）────────────────────────────
+doctor_main() {
+  echo "===== WindAgent doctor $(date '+%F %T') ====="
+  step "doctor: WindAgent 安装健康检查"
+  DOCTOR_FAILED=0
+
+  # 冒烟测试需要 httpx：优先用 Hermes 自己的 venv Python（必有该依赖）
+  HERMES_AGENT_REPO="$(echo "$("$HERMES_BIN" version 2>&1)" | grep -o 'Install directory: .*' | awk '{print $3}' || true)"
+  HERMES_AGENT_REPO="${HERMES_AGENT_REPO:-$HERMES_ROOT/hermes-agent}"
+  HERMES_PYTHON=""
+  for candidate in "$HERMES_AGENT_REPO/venv/bin/python" "$HERMES_AGENT_REPO/.venv/bin/python"; do
+    if [[ -x "$candidate" ]]; then HERMES_PYTHON="$candidate"; break; fi
+  done
+  HERMES_PYTHON="${HERMES_PYTHON:-python3}"
+
+  step "1. Hermes 环境"
+  if command -v "$HERMES_BIN" >/dev/null 2>&1 && "$HERMES_BIN" version >/dev/null 2>&1; then
+    ok "hermes 可执行"
+  else
+    err "hermes 不可用（$HERMES_BIN）"; DOCTOR_FAILED=$((DOCTOR_FAILED + 1))
+  fi
+
+  step "2. profile: $PROFILE_NAME"
+  PROFILE_LIST="$("$HERMES_BIN" profile list 2>&1 || true)"
+  if echo "$PROFILE_LIST" | grep -qw "$PROFILE_NAME"; then
+    ok "profile 存在"
+  else
+    err "profile 缺失（先运行 ./install.sh）"; DOCTOR_FAILED=$((DOCTOR_FAILED + 1))
+  fi
+
+  step "3. 技能（hermes-agent + wind）"
+  SKILL_OUT="$("$HERMES_BIN" -p "$PROFILE_NAME" skills list --enabled-only 2>&1 || true)"
+  if echo "$SKILL_OUT" | grep -q "hermes-agent"; then
+    ok "hermes-agent 已启用"
+  else
+    err "hermes-agent skill 未启用"; DOCTOR_FAILED=$((DOCTOR_FAILED + 1))
+  fi
+  WIND_COUNT="$(echo "$SKILL_OUT" | grep -c "│ wind " || true)"
+  WIND_EXPECT="$(ls "$SKILLS_SRC" 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ -n "$WIND_EXPECT" && "$WIND_COUNT" -ge "$WIND_EXPECT" ]]; then
+    ok "wind 技能 $WIND_COUNT/$WIND_EXPECT 已注册"
+  else
+    err "wind 技能数量异常（$WIND_COUNT/$WIND_EXPECT）"; DOCTOR_FAILED=$((DOCTOR_FAILED + 1))
+  fi
+
+  step "4. 插件 wind_tool"
+  PLUGIN_LIST="$("$HERMES_BIN" -p "$PROFILE_NAME" plugins list 2>&1 || true)"
+  if echo "$PLUGIN_LIST" | grep -q "wind_tool"; then
+    ok "插件已注册"
+  else
+    err "插件 wind_tool 未注册"; DOCTOR_FAILED=$((DOCTOR_FAILED + 1))
+  fi
+
+  step "5. 关键文件"
+  for f in "$PROFILE_DIR/SOUL.md" "$PROFILE_DIR/memories/MEMORY.md" \
+      "$PROFILE_DIR/scripts/smoke_wind_tools.py" "$PROFILE_DIR/scripts/wind_login.py" \
+      "$PROFILE_DIR/scripts/is_business_day.py" "$PROFILE_DIR/.env"; do
+    if [[ -f "$f" ]]; then
+      ok "$(basename "$f")"
+    else
+      err "$(basename "$f") 缺失"; DOCTOR_FAILED=$((DOCTOR_FAILED + 1))
+    fi
+  done
+
+  step "6. 鉴权配置"
+  PROFILE_ENV="$PROFILE_DIR/.env"
+  if grep -q "^WIND_SESSION_ID=" "$PROFILE_ENV" 2>/dev/null; then
+    SESSION_VAL="$(grep "^WIND_SESSION_ID=" "$PROFILE_ENV" | head -1 | cut -d= -f2-)"
+    if [[ -n "$SESSION_VAL" ]]; then
+      ok "WIND_SESSION_ID 已配置"
+    else
+      warn "WIND_SESSION_ID 为空（未登录，可在对话中运行 /wind-login）"
+    fi
+  else
+    err "WIND_SESSION_ID 未配置"; DOCTOR_FAILED=$((DOCTOR_FAILED + 1))
+  fi
+  if grep -q 'profiles" / "windagent"' "$PROFILE_DIR/plugins/wind_tool/__init__.py" 2>/dev/null; then
+    ok "插件 .env 优先读 windagent profile"
+  else
+    err "插件 .env 读取修复缺失"; DOCTOR_FAILED=$((DOCTOR_FAILED + 1))
+  fi
+
+  step "7. cron 日报（4 个 + 交易日门卫）"
+  declare -a CRON_EXPECT=(
+    "美股收盘市场简报|0 7 * * 1-5"
+    "盘前机会挖掘|30 8 * * 1-5"
+    "午间复盘|15 12 * * 1-5"
+    "盘后市场解读|0 16 * * 1-5"
+  )
+  CRON_LIST="$("$HERMES_BIN" -p "$PROFILE_NAME" cron list 2>&1 || true)"
+  for entry in "${CRON_EXPECT[@]}"; do
+    IFS='|' read -r job_name sched <<< "$entry"
+    if echo "$CRON_LIST" | grep -q "Name:.*$job_name"; then
+      if echo "$CRON_LIST" | grep -qF "Schedule:  $sched"; then
+        ok "$job_name ($sched)"
+      else
+        warn "$job_name 存在但调度不符"
+      fi
+    else
+      err "$job_name 缺失"; DOCTOR_FAILED=$((DOCTOR_FAILED + 1))
+    fi
+  done
+  GATE_CHECK="$(python3 - "$PROFILE_DIR" <<'PY'
+import json, sys
+prof = sys.argv[1]
+expected = {
+    "美股收盘市场简报": "0 7 * * 1-5",
+    "盘前机会挖掘": "30 8 * * 1-5",
+    "午间复盘": "15 12 * * 1-5",
+    "盘后市场解读": "0 16 * * 1-5",
+}
+try:
+    data = json.load(open(prof + "/cron/jobs.json", encoding="utf-8"))
+except Exception:
+    print("FAIL jobs.json 不可读（cron 未注册）")
+    sys.exit(0)
+jobs = {j.get("name"): j for j in data.get("jobs", [])}
+missing = [n for n in expected if n not in jobs]
+nogate = [n for n in expected if n in jobs and "is_business_day" not in (jobs[n].get("prompt") or "")]
+wrong = [n for n in expected if n in jobs and jobs[n].get("schedule_display") != expected[n]]
+disabled = [n for n in expected if n in jobs and not jobs[n].get("enabled", True)]
+if missing or nogate or wrong or disabled:
+    print("FAIL " + json.dumps({"缺失": missing, "门卫缺失": nogate, "调度不符": wrong, "被禁用": disabled}, ensure_ascii=False))
+else:
+    print("OK 4 个任务均存在、启用、调度正确、门卫已挂载")
+PY
+)"
+  if [[ "$GATE_CHECK" == OK* ]]; then
+    ok "${GATE_CHECK#OK }"
+  else
+    err "${GATE_CHECK#FAIL }"; DOCTOR_FAILED=$((DOCTOR_FAILED + 1))
+  fi
+  GATEWAY_OUT="$("$HERMES_BIN" -p "$PROFILE_NAME" cron status 2>&1 || true)"
+  if echo "$GATEWAY_OUT" | grep -q "not running"; then
+    warn "gateway 未运行，cron 不会自动触发（hermes gateway install）"
+  else
+    ok "gateway 运行中"
+  fi
+
+  step "8. 交易日脚本 is_business_day.py"
+  BD_CHECK="$(python3 - "$PROFILE_DIR/scripts" <<'PY'
+import ast, json, subprocess, sys
+from datetime import date
+from pathlib import Path
+scripts = Path(sys.argv[1])
+script = scripts / "is_business_day.py"
+cache_file = scripts / "wind-business-days.json"
+try:
+    ast.parse(script.read_text(encoding="utf-8"))
+except Exception as e:
+    print("FAIL 语法错误: %s" % e); sys.exit(0)
+today = date.today()
+year = str(today.year)
+try:
+    rc = subprocess.run([sys.executable, str(script), "--date", today.isoformat()], timeout=60).returncode
+except Exception as e:
+    print("FAIL 运行失败: %s" % e); sys.exit(0)
+if rc == 2:
+    print("FAIL 无法获取 %s 年休市表（检查网络或官方是否已发布当年安排）" % year); sys.exit(0)
+try:
+    cache = json.loads(cache_file.read_text(encoding="utf-8"))
+    cal = cache.get(year, {})
+    closed, opened = cal.get("closed", []), cal.get("open", [])
+except Exception as e:
+    print("FAIL 缓存读取失败: %s" % e); sys.exit(0)
+if len(closed) < 5:
+    print("FAIL 当年工作日休市表异常（仅 %d 天）" % len(closed)); sys.exit(0)
+bad_closed = [d for d in closed if date.fromisoformat(d).weekday() >= 5]
+bad_open = [d for d in opened if date.fromisoformat(d).weekday() < 5]
+if bad_closed or bad_open:
+    print("FAIL 数据异常: closed 含周末 %s / open 含工作日 %s" % (bad_closed[:3], bad_open[:3])); sys.exit(0)
+expected = 0 if (today.isoformat() in opened or (today.weekday() < 5 and today.isoformat() not in closed)) else 1
+if rc != expected:
+    print("FAIL 判定不一致: 脚本=%d 期望=%d" % (rc, expected)); sys.exit(0)
+print("OK 语法/缓存/判定一致（%s: %d 个工作日休市, open=%d）" % (year, len(closed), len(opened)))
+PY
+)"
+  if [[ "$BD_CHECK" == OK* ]]; then
+    ok "${BD_CHECK#OK }"
+  else
+    err "${BD_CHECK#FAIL }"; DOCTOR_FAILED=$((DOCTOR_FAILED + 1))
+  fi
+
+  if [[ "$DOCTOR_FULL" == "1" ]]; then
+    step "9. 冒烟测试（20 个工具，需已登录 + 网络）"
+    if [[ -z "${SESSION_VAL:-}" ]]; then
+      warn "WIND_SESSION_ID 为空，跳过冒烟（先运行 /wind-login）"
+    elif "$HERMES_PYTHON" "$PROFILE_DIR/scripts/smoke_wind_tools.py" --session-id "$SESSION_VAL" --quiet; then
+      ok "20 个工具连通"
+    else
+      err "冒烟测试失败（检查 session 是否过期）"; DOCTOR_FAILED=$((DOCTOR_FAILED + 1))
+    fi
+  fi
+
+  echo
+  if [[ "$DOCTOR_FAILED" == "0" ]]; then
+    echo "${GREEN}✔ doctor 全部通过。${NC} 详见 docs/install-doctor.md"
+  else
+    echo "${RED}✘ doctor 发现 $DOCTOR_FAILED 项问题，请按上方提示处理。${NC}"
+  fi
+  return "$DOCTOR_FAILED"
+}
+
+if [[ "$DOCTOR" == "1" ]]; then
+  doctor_main
+  exit $?
 fi
 
 # ── 1. 检查 Hermes ───────────────────────────────────────────────────────
@@ -67,8 +283,6 @@ HERMES_PYTHON=""
 for candidate in "$HERMES_AGENT_REPO/venv/bin/python" "$HERMES_AGENT_REPO/.venv/bin/python"; do
   if [[ -x "$candidate" ]]; then HERMES_PYTHON="$candidate"; break; fi
 done
-HERMES_PYTHON="${HERMES_PYTHON:-python3}"
-
 # ── 2. 创建 profile ──────────────────────────────────────────────────────
 step "创建 profile: $PROFILE_NAME"
 if [[ -d "$PROFILE_DIR" ]]; then
